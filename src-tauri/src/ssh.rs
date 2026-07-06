@@ -187,6 +187,35 @@ fn tcp_connect(host: &str, port: u16) -> Result<TcpStream, String> {
     Ok(tcp)
 }
 
+/// libssh2 can't parse the modern OpenSSH private-key container. Decode it with
+/// a pure-Rust parser and re-encode as PKCS#8 PEM, which libssh2/OpenSSL reads.
+/// Returns None for keys already in a PEM form libssh2 handles directly.
+fn key_to_pem(path: &str, passphrase: Option<&str>) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    if !content.contains("OPENSSH PRIVATE KEY") {
+        return None;
+    }
+    use pkcs8::{EncodePrivateKey, LineEnding};
+    use ssh_key::private::KeypairData;
+    let key = ssh_key::PrivateKey::from_openssh(content.as_bytes()).ok()?;
+    let key = if key.is_encrypted() {
+        key.decrypt(passphrase.unwrap_or("").as_bytes()).ok()?
+    } else {
+        key
+    };
+    match key.key_data() {
+        KeypairData::Rsa(r) => {
+            let sk = rsa::RsaPrivateKey::try_from(r).ok()?;
+            Some(sk.to_pkcs8_pem(LineEnding::LF).ok()?.to_string())
+        }
+        KeypairData::Ed25519(e) => {
+            let sk = ed25519_dalek::SigningKey::from_bytes(&e.private.to_bytes());
+            Some(sk.to_pkcs8_pem(LineEnding::LF).ok()?.to_string())
+        }
+        _ => None,
+    }
+}
+
 struct AuthParams<'a> {
     user: &'a str,
     auth: &'a str,
@@ -226,12 +255,12 @@ fn session_over(tcp: TcpStream, p: AuthParams) -> Result<Session, String> {
                 if encrypted && secret.is_none() {
                     return Err(format!("AUTH_PASSPHRASE_REQUIRED\t{}", p.secret_key));
                 }
-                if let Err(e) = sess.userauth_pubkey_file(
-                    p.user,
-                    None,
-                    Path::new(&key),
-                    secret.as_deref(),
-                ) {
+                let pem = key_to_pem(&key, secret.as_deref());
+                let res = match &pem {
+                    Some(pem) => sess.userauth_pubkey_memory(p.user, None, pem, None),
+                    None => sess.userauth_pubkey_file(p.user, None, Path::new(&key), secret.as_deref()),
+                };
+                if let Err(e) = res {
                     last_err = e.to_string();
                 }
                 if !sess.authenticated() && !encrypted {
