@@ -101,6 +101,18 @@ function AppInner() {
       const ids = new Set(saved.map((s) => s.id));
       setSnippets([...saved, ...DEFAULT_SNIPPETS.filter((s) => !ids.has(s.id))]);
       setRuntimes(Object.fromEntries(srv.map((s) => [s.id, emptyRuntime()])));
+      try {
+        const st = JSON.parse(localStorage.getItem("sd-tabs") || "null");
+        if (st?.tabs?.length) {
+          const valid: Tab[] = st.tabs.filter(
+            (tb: Tab) => tb.serverId === null || srv.some((s) => s.id === tb.serverId)
+          );
+          setTabs(valid);
+          setActiveTabId(
+            valid.some((tb) => tb.id === st.activeTabId) ? st.activeTabId : valid[0]?.id ?? null
+          );
+        }
+      } catch {}
       setLoaded(true);
     });
   }, []);
@@ -108,6 +120,10 @@ function AppInner() {
   useEffect(() => {
     if (loaded) ipc.saveConfig({ servers, snippets }).catch(() => {});
   }, [servers, snippets, loaded]);
+
+  useEffect(() => {
+    if (loaded) localStorage.setItem("sd-tabs", JSON.stringify({ tabs, activeTabId }));
+  }, [tabs, activeTabId, loaded]);
 
   const setStatus = useCallback((id: string, status: Status, error?: string) => {
     setRuntimes((r) => ({ ...r, [id]: { ...(r[id] ?? emptyRuntime()), status, error } }));

@@ -186,6 +186,33 @@ input.mono { font-family: var(--mono); }
 /* ===== terminal ===== */
 .term-wrap { flex: 1; min-height: 0; background: var(--term); padding: 8px 4px 4px 10px; }
 .term-wrap .xterm { height: 100%; }
+.term-search {
+  position: absolute; top: 8px; right: 16px; z-index: 10;
+  display: flex; align-items: center; gap: 6px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 4px 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.term-search input { border: none; background: transparent; padding: 4px 2px; font-size: 12px; width: 180px; }
+.term-search-btn {
+  width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
+  border-radius: 4px; color: var(--muted); cursor: pointer; font-size: 13px;
+}
+.term-search-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+.term-reconnect {
+  position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 10;
+  display: flex; align-items: center; gap: 12px;
+  background: var(--border2); border: 1px solid #2f333b; border-radius: 10px;
+  padding: 8px 14px; box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+}
+.editor-area {
+  flex: 1; min-height: 0; resize: none; border: none; border-radius: 0;
+  background: var(--term); color: var(--body); font-size: 12.5px; line-height: 1.55;
+  padding: 12px 14px; width: 100%; tab-size: 4;
+}
+.editor-area:focus { border: none; }
+.term-font-ctl { display: inline-flex; align-items: center; gap: 7px; }
+.term-font-ctl > span:first-child, .term-font-ctl > span:last-child { cursor: pointer; }
+.term-font-ctl > span:first-child:hover, .term-font-ctl > span:last-child:hover { color: var(--text); }
 
 /* ===== overview ===== */
 .overview { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 22px; }
@@ -323,7 +350,7 @@ input.mono { font-family: var(--mono); }
 }
 .ex-th { cursor: pointer; }
 .ex-th:hover { color: var(--muted); }
-.ex-trow { padding: 6px 14px; cursor: pointer; }
+.ex-trow { height: 30px; padding: 0 14px; cursor: pointer; }
 .ex-trow:hover { background: rgba(255, 255, 255, 0.04); }
 .ex-trow.selected { background: var(--accent-soft); }
 .ex-trow.hidden-f { opacity: 0.72; }

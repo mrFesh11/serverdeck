@@ -185,6 +185,52 @@ async fn sftp_preview(
 }
 
 #[tauri::command]
+async fn sftp_read_text(
+    state: State<'_, AppState>,
+    cfg: ServerCfg,
+    path: String,
+) -> Result<String, String> {
+    let controls = state.controls.clone();
+    blocking(move || {
+        ssh::with_session(&controls, &cfg, |sess| {
+            let sftp = sess.sftp().map_err(|e| e.to_string())?;
+            let mut f = sftp.open(Path::new(&path)).map_err(|e| e.to_string())?;
+            let size = f.stat().map(|s| s.size.unwrap_or(0)).unwrap_or(0);
+            if size > 4 * 1024 * 1024 {
+                return Err("Файл слишком большой для редактора (> 4 МБ)".into());
+            }
+            let mut buf = Vec::new();
+            f.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+            if buf.contains(&0) {
+                return Err("Бинарный файл — редактирование недоступно".into());
+            }
+            Ok(String::from_utf8_lossy(&buf).into_owned())
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn sftp_write_text(
+    state: State<'_, AppState>,
+    cfg: ServerCfg,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    let controls = state.controls.clone();
+    blocking(move || {
+        ssh::with_session(&controls, &cfg, |sess| {
+            let sftp = sess.sftp().map_err(|e| e.to_string())?;
+            let mut f = sftp.create(Path::new(&path)).map_err(|e| e.to_string())?;
+            f.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+            f.flush().ok();
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tauri::command]
 async fn sftp_download(
     state: State<'_, AppState>,
     cfg: ServerCfg,
@@ -493,6 +539,8 @@ fn main() {
             test_connection,
             sftp_list,
             sftp_preview,
+            sftp_read_text,
+            sftp_write_text,
             sftp_download,
             sftp_upload,
             sftp_rename,

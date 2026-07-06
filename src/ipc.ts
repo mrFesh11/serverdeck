@@ -19,6 +19,9 @@ export const ipc = {
   sftpList: (cfg: ServerCfg, path: string) => invoke<FileEntry[]>("sftp_list", { cfg, path }),
   sftpPreview: (cfg: ServerCfg, path: string) =>
     invoke<{ text: string | null; size: number }>("sftp_preview", { cfg, path }),
+  sftpReadText: (cfg: ServerCfg, path: string) => invoke<string>("sftp_read_text", { cfg, path }),
+  sftpWriteText: (cfg: ServerCfg, path: string, content: string) =>
+    invoke<void>("sftp_write_text", { cfg, path, content }),
   sftpDownload: (cfg: ServerCfg, remote: string, local: string) =>
     invoke<void>("sftp_download", { cfg, remote, local }),
   sftpUpload: (cfg: ServerCfg, local: string, remote: string) =>

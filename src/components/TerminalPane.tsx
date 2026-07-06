@@ -1,10 +1,17 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { listen } from "@tauri-apps/api/event";
 import { b64decode, b64encode, ipc } from "../ipc";
 import { useT } from "../i18n";
 import type { Runtime, ServerCfg, Tab } from "../types";
+
+const FONT_KEY = "sd-term-font";
+const loadFont = () => {
+  const n = parseInt(localStorage.getItem(FONT_KEY) ?? "13");
+  return isNaN(n) ? 13 : Math.min(24, Math.max(9, n));
+};
 
 interface Props {
   tab: Tab;
@@ -28,14 +35,40 @@ function TerminalPaneInner({ tab, server, runtime, visible, onAuthError }: Props
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const [startedAt] = useState(() => Date.now());
+  const searchRef = useRef<SearchAddon | null>(null);
+  const [startedAt, setStartedAt] = useState(() => Date.now());
   const [elapsed, setElapsed] = useState("00:00:00");
   const [closed, setClosed] = useState<string | null>(null);
+  const [fontSize, setFontSize] = useState(loadFont);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQ, setSearchQ] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const setFont = (n: number) => {
+    const v = Math.min(24, Math.max(9, n));
+    localStorage.setItem(FONT_KEY, String(v));
+    setFontSize(v);
+    if (termRef.current) {
+      termRef.current.options.fontSize = v;
+      requestAnimationFrame(() => fitRef.current?.fit());
+    }
+  };
+
+  const reconnect = () => {
+    const term = termRef.current;
+    if (!term) return;
+    term.reset();
+    setClosed(null);
+    setStartedAt(Date.now());
+    ipc.termOpen(server, tab.id, term.cols, term.rows).catch((e) => {
+      term.writeln(`\x1b[31m${t("Ошибка подключения")}: ${e}\x1b[0m`);
+    });
+  };
 
   useEffect(() => {
     const term = new Terminal({
       fontFamily: "'JetBrains Mono', monospace",
-      fontSize: 13,
+      fontSize: loadFont(),
       lineHeight: 1.2,
       cursorBlink: true,
       scrollback: 8000,
@@ -43,7 +76,7 @@ function TerminalPaneInner({ tab, server, runtime, visible, onAuthError }: Props
         background: "#0b0d10",
         foreground: "#c2c6cd",
         cursor: "#c2c6cd",
-        selectionBackground: "rgba(91,147,204,0.35)",
+        selectionBackground: "rgba(70,168,110,0.35)",
         black: "#1c1f25",
         red: "#c85c58",
         green: "#6ea36b",
@@ -63,11 +96,36 @@ function TerminalPaneInner({ tab, server, runtime, visible, onAuthError }: Props
       },
     });
     const fit = new FitAddon();
+    const search = new SearchAddon();
     term.loadAddon(fit);
+    term.loadAddon(search);
     term.open(hostRef.current!);
     fit.fit();
     termRef.current = term;
     fitRef.current = fit;
+    searchRef.current = search;
+
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown") return true;
+      if ((e.ctrlKey || e.metaKey) && (e.key === "=" || e.key === "+")) {
+        setFont(loadFont() + 1);
+        return false;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "-") {
+        setFont(loadFont() - 1);
+        return false;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "0") {
+        setFont(13);
+        return false;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+        setSearchOpen(true);
+        setTimeout(() => searchInputRef.current?.focus(), 0);
+        return false;
+      }
+      return true;
+    });
 
     const unsubs: Array<() => void> = [];
     let disposed = false;
@@ -137,6 +195,13 @@ function TerminalPaneInner({ tab, server, runtime, visible, onAuthError }: Props
     return () => clearInterval(iv);
   }, [startedAt]);
 
+  const runSearch = (dir: 1 | -1) => {
+    if (!searchQ) return;
+    const opts = { caseSensitive: false };
+    if (dir === 1) searchRef.current?.findNext(searchQ, opts);
+    else searchRef.current?.findPrevious(searchQ, opts);
+  };
+
   return (
     <div
       style={{
@@ -144,9 +209,49 @@ function TerminalPaneInner({ tab, server, runtime, visible, onAuthError }: Props
         minHeight: 0,
         display: visible ? "flex" : "none",
         flexDirection: "column",
+        position: "relative",
       }}
     >
+      {searchOpen && (
+        <div className="term-search">
+          <span style={{ color: "var(--dim)", fontSize: 12 }}>⌕</span>
+          <input
+            ref={searchInputRef}
+            placeholder={t("Поиск в выводе…")}
+            value={searchQ}
+            onChange={(e) => {
+              setSearchQ(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") runSearch(e.shiftKey ? -1 : 1);
+              if (e.key === "Escape") {
+                setSearchOpen(false);
+                termRef.current?.focus();
+              }
+            }}
+          />
+          <span className="term-search-btn" onClick={() => runSearch(-1)}>↑</span>
+          <span className="term-search-btn" onClick={() => runSearch(1)}>↓</span>
+          <span
+            className="term-search-btn"
+            onClick={() => {
+              setSearchOpen(false);
+              termRef.current?.focus();
+            }}
+          >
+            ×
+          </span>
+        </div>
+      )}
       <div className="term-wrap" ref={hostRef} />
+      {closed && (
+        <div className="term-reconnect">
+          <span style={{ color: "var(--muted)", fontSize: 12 }}>{t("Сессия закрыта")}</span>
+          <span className="btn-ghost" style={{ padding: "5px 12px", fontSize: 12 }} onClick={reconnect}>
+            ↻ {t("Переподключиться")}
+          </span>
+        </div>
+      )}
       <div className="statusbar">
         <span style={{ color: closed ? "var(--red)" : "var(--green)" }}>●</span>
         <span style={{ marginLeft: 6, color: "#b6bac2" }}>{server.name}</span>
@@ -161,9 +266,13 @@ function TerminalPaneInner({ tab, server, runtime, visible, onAuthError }: Props
           </>
         )}
         <span style={{ flex: 1 }} />
-        <span>{t("сессия")} {elapsed}</span>
+        <span className="term-font-ctl" title={t("Размер шрифта (Ctrl +/−)")}>
+          <span onClick={() => setFont(fontSize - 1)}>A−</span>
+          <span style={{ color: "var(--dim)" }}>{fontSize}</span>
+          <span onClick={() => setFont(fontSize + 1)}>A+</span>
+        </span>
         <span className="sep">·</span>
-        <span>xterm-256color</span>
+        <span>{t("сессия")} {elapsed}</span>
         <span className="sep">·</span>
         <span>UTF-8</span>
       </div>
