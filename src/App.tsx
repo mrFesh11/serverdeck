@@ -17,6 +17,7 @@ import { EmptyState } from "./components/EmptyState";
 import { ToastHost, useToasts } from "./components/Toasts";
 import { SecretPrompt, HostKeyDialog, type SecretReq, type HostKeyReq } from "./components/AuthDialogs";
 import { ImportModal } from "./components/ImportModal";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { parseAuthError } from "./authFlow";
 
 export const uid = () => Math.random().toString(36).slice(2, 10);
@@ -364,6 +365,7 @@ function AppInner() {
 
   return (
     <div className="app">
+      <UpdateBanner />
       {collapsed ? (
         <Rail
           servers={servers}
