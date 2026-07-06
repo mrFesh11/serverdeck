@@ -59,7 +59,14 @@ export function ServerModal({ initial, onClose, onSave, onDelete }: Props) {
   };
 
   const pickKey = async () => {
-    const f = await openDialog({ multiple: false });
+    const home = await ipc.homeDir();
+    const raw = keyPath.trim().replace(/^~/, home);
+    const dir = raw.includes("/") ? raw.slice(0, raw.lastIndexOf("/")) : `${home}/.ssh`;
+    const f = await openDialog({
+      multiple: false,
+      defaultPath: dir || `${home}/.ssh`,
+      title: t("Выбор SSH-ключа"),
+    });
     if (typeof f === "string") setKeyPath(f);
   };
 
