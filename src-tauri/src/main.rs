@@ -85,6 +85,32 @@ async fn ssh_exec(
 }
 
 #[tauri::command]
+async fn ssh_exec_pty(
+    state: State<'_, AppState>,
+    cfg: ServerCfg,
+    cmd: String,
+) -> Result<ExecOut, String> {
+    let controls = state.controls.clone();
+    let id = cfg.id.clone();
+    blocking(move || ssh::with_session(&controls, &cfg, |s| ssh::exec_pty(s, &cmd, &id))).await
+}
+
+#[tauri::command]
+fn provide_secret(key: String, value: String) {
+    ssh::set_secret(key, value);
+}
+
+#[tauri::command]
+fn trust_host_key(label: String, fingerprint: String) -> Result<(), String> {
+    ssh::trust_host(&label, &fingerprint)
+}
+
+#[tauri::command]
+async fn import_ssh_config() -> Result<Vec<ssh::ParsedHost>, String> {
+    blocking(|| Ok(ssh::parse_ssh_config())).await
+}
+
+#[tauri::command]
 async fn test_connection(cfg: ServerCfg) -> Result<u64, String> {
     blocking(move || {
         let start = std::time::Instant::now();
@@ -406,6 +432,7 @@ fn term_close(state: State<'_, AppState>, termId: String) {
 fn disconnect_server(state: State<'_, AppState>, serverId: String) {
     state.controls.lock().unwrap().remove(&serverId);
     state.owners.lock().unwrap().remove(&serverId);
+    ssh::clear_secret(&serverId);
 }
 
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
@@ -459,6 +486,10 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             ssh_exec,
+            ssh_exec_pty,
+            provide_secret,
+            trust_host_key,
+            import_ssh_config,
             test_connection,
             sftp_list,
             sftp_preview,

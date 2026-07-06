@@ -16,6 +16,7 @@ interface SidebarProps {
   onCollapse: () => void;
   onOpenTab: (serverId: string | null, mode: TabMode) => void;
   onAdd: () => void;
+  onImport: () => void;
   onEdit: (s: ServerCfg) => void;
   onPalette: () => void;
   onSnippets: () => void;
@@ -30,8 +31,8 @@ export function Sidebar(p: SidebarProps) {
   return (
     <div className="sidebar">
       <div className="sb-brand">
-        <div className="sb-logo">S</div>
-        <div className="sb-title">ServerDeck</div>
+        <div className="sb-logo">N</div>
+        <div className="sb-title">Nimbus</div>
         <div style={{ flex: 1 }} />
         <div className="kbd" title="RU / EN" onClick={() => setLang(lang === "ru" ? "en" : "ru")}>
           {lang.toUpperCase()}
@@ -40,8 +41,16 @@ export function Sidebar(p: SidebarProps) {
         <div className="sb-collapse" title={t("Свернуть")} onClick={p.onCollapse}>‹</div>
       </div>
 
-      <div style={{ padding: "10px 12px 8px" }}>
+      <div style={{ padding: "10px 12px 4px" }}>
         <div className="sb-add" onClick={p.onAdd}>{t("+ Добавить сервер")}</div>
+      </div>
+      <div style={{ padding: "0 12px 8px", textAlign: "center" }}>
+        <span
+          style={{ fontSize: 11, color: "var(--dim)", cursor: "pointer" }}
+          onClick={p.onImport}
+        >
+          {t("Импорт из ~/.ssh/config")}
+        </span>
       </div>
 
       <div className="sb-sec">
@@ -197,7 +206,7 @@ interface RailProps {
 export function Rail(p: RailProps) {
   return (
     <div className="rail">
-      <div className="rail-logo" onClick={p.onExpand}>S</div>
+      <div className="rail-logo" onClick={p.onExpand}>N</div>
       <div style={{ width: 20, height: 1, background: "var(--border)" }} />
       {p.servers.map((s) => (
         <div key={s.id} className="rail-item" title={s.name} onClick={() => p.onServer(s)}>

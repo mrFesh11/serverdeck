@@ -1,6 +1,6 @@
 [package]
-name = "serverdeck"
-version = "0.1.0"
+name = "nimbus"
+version = "0.1.1"
 edition = "2021"
 
 [build-dependencies]

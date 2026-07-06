@@ -2,7 +2,7 @@ import { useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ipc } from "../ipc";
 import { useT } from "../i18n";
-import type { ServerCfg } from "../types";
+import type { AuthMethod, ServerCfg } from "../types";
 import { uid } from "../App";
 
 interface Props {
@@ -19,6 +19,7 @@ export function ServerModal({ initial, onClose, onSave, onDelete }: Props) {
   const [port, setPort] = useState(String(initial?.port ?? 22));
   const [user, setUser] = useState(initial?.user ?? "root");
   const [keyPath, setKeyPath] = useState(initial?.keyPath ?? "~/.ssh/id_ed25519");
+  const [auth, setAuth] = useState<AuthMethod>(initial?.auth ?? "key");
   const [jumpOn, setJumpOn] = useState(!!initial?.jump);
   const [jHost, setJHost] = useState(initial?.jump?.host ?? "");
   const [jPort, setJPort] = useState(String(initial?.jump?.port ?? 22));
@@ -34,6 +35,7 @@ export function ServerModal({ initial, onClose, onSave, onDelete }: Props) {
     port: parseInt(port) || 22,
     user: user.trim() || "root",
     keyPath: keyPath.trim(),
+    auth,
     jump:
       jumpOn && jHost.trim()
         ? {
@@ -41,6 +43,7 @@ export function ServerModal({ initial, onClose, onSave, onDelete }: Props) {
             port: parseInt(jPort) || 22,
             user: jUser.trim() || "root",
             keyPath: jKey.trim(),
+            auth: "key",
           }
         : null,
   });
@@ -97,14 +100,46 @@ export function ServerModal({ initial, onClose, onSave, onDelete }: Props) {
             <input className="mono" value={user} onChange={(e) => setUser(e.target.value)} />
           </div>
           <div>
-            <div className="field-label">{t("SSH-ключ (пусто — ssh-agent)")}</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input className="mono" style={{ flex: 1, fontSize: 12 }} value={keyPath} onChange={(e) => setKeyPath(e.target.value)} />
-              <div className="btn-ghost" style={{ padding: "9px 13px", flex: "none" }} onClick={() => void pickKey()}>
-                {t("Выбрать…")}
-              </div>
+            <div className="field-label">{t("Аутентификация")}</div>
+            <div className="seg" style={{ width: "100%" }}>
+              {([["key", t("Ключ")], ["password", t("Пароль")], ["agent", "ssh-agent"]] as [AuthMethod, string][]).map(
+                ([m, lbl]) => (
+                  <div
+                    key={m}
+                    className={"seg-btn" + (auth === m ? " active" : "")}
+                    style={{ flex: 1, justifyContent: "center", fontSize: 12.5, padding: "7px 0" }}
+                    onClick={() => setAuth(m)}
+                  >
+                    {lbl}
+                  </div>
+                )
+              )}
             </div>
           </div>
+          {auth === "key" && (
+            <div>
+              <div className="field-label">{t("SSH-ключ")}</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input className="mono" style={{ flex: 1, fontSize: 12 }} value={keyPath} onChange={(e) => setKeyPath(e.target.value)} />
+                <div className="btn-ghost" style={{ padding: "9px 13px", flex: "none" }} onClick={() => void pickKey()}>
+                  {t("Выбрать…")}
+                </div>
+              </div>
+              <div style={{ fontSize: 10.5, color: "var(--dim)", marginTop: 5 }}>
+                {t("Если ключ с паролем — попросим passphrase при подключении.")}
+              </div>
+            </div>
+          )}
+          {auth === "password" && (
+            <div style={{ fontSize: 11.5, color: "var(--muted)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 7, padding: "9px 11px" }}>
+              {t("Пароль запросим при подключении и сохраним только в памяти.")}
+            </div>
+          )}
+          {auth === "agent" && (
+            <div style={{ fontSize: 11.5, color: "var(--muted)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 7, padding: "9px 11px" }}>
+              {t("Ключи берутся из запущенного ssh-agent.")}
+            </div>
+          )}
           <div
             className={"tool-toggle" + (jumpOn ? " on" : "")}
             style={{ alignSelf: "flex-start" }}

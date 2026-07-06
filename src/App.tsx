@@ -14,6 +14,9 @@ import { Palette } from "./components/Palette";
 import { ServerModal } from "./components/ServerModal";
 import { EmptyState } from "./components/EmptyState";
 import { ToastHost, useToasts } from "./components/Toasts";
+import { SecretPrompt, HostKeyDialog, type SecretReq, type HostKeyReq } from "./components/AuthDialogs";
+import { ImportModal } from "./components/ImportModal";
+import { parseAuthError } from "./authFlow";
 
 export const uid = () => Math.random().toString(36).slice(2, 10);
 
@@ -72,8 +75,16 @@ function AppInner() {
   const [collapsed, setCollapsed] = useState(false);
   const [palette, setPalette] = useState(false);
   const [serverModal, setServerModal] = useState<ServerCfg | "new" | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [secretPrompt, setSecretPrompt] = useState<(SecretReq & { serverId: string }) | null>(null);
+  const [hostKeyPrompt, setHostKeyPrompt] = useState<(HostKeyReq & { serverId: string }) | null>(null);
   const { toasts, toast } = useToasts();
+
+  const secretPromptRef = useRef(secretPrompt);
+  secretPromptRef.current = secretPrompt;
+  const hostKeyPromptRef = useRef(hostKeyPrompt);
+  hostKeyPromptRef.current = hostKeyPrompt;
 
   const serversRef = useRef(servers);
   serversRef.current = servers;
@@ -100,6 +111,25 @@ function AppInner() {
 
   const setStatus = useCallback((id: string, status: Status, error?: string) => {
     setRuntimes((r) => ({ ...r, [id]: { ...(r[id] ?? emptyRuntime()), status, error } }));
+  }, []);
+
+  const handleAuthError = useCallback((server: ServerCfg, err: unknown): string | null => {
+    const ev = parseAuthError(err);
+    if (!ev) return null;
+    if (ev.kind === "hostkey") {
+      if (!hostKeyPromptRef.current)
+        setHostKeyPrompt({ serverId: server.id, serverName: server.name, label: ev.label, known: ev.known, got: ev.got });
+      return "проверка ключа сервера";
+    }
+    if (!secretPromptRef.current || secretPromptRef.current.serverId !== server.id)
+      setSecretPrompt({
+        serverId: server.id,
+        serverName: server.name,
+        secretKey: ev.secretKey,
+        kind: ev.kind,
+        wrong: ev.wrong,
+      });
+    return ev.kind === "password" ? "нужен пароль" : "нужна passphrase";
   }, []);
 
   const pollServer = useCallback(async (s: ServerCfg, withDocker?: boolean) => {
@@ -133,9 +163,10 @@ function AppInner() {
         };
       });
     } catch (e) {
-      setStatus(s.id, "offline", String(e));
+      const friendly = handleAuthError(s, e);
+      setStatus(s.id, "offline", friendly ?? String(e));
     }
-  }, [setStatus]);
+  }, [setStatus, handleAuthError]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -213,6 +244,39 @@ function AppInner() {
     ipc.disconnect(id).catch(() => {});
   }, []);
 
+  const submitSecret = useCallback(async (value: string) => {
+    const p = secretPromptRef.current;
+    if (!p) return;
+    await ipc.provideSecret(p.secretKey, value).catch(() => {});
+    setSecretPrompt(null);
+    const s = serversRef.current.find((x) => x.id === p.serverId);
+    if (s) setTimeout(() => void pollServer(s), 50);
+  }, [pollServer]);
+
+  const acceptHostKey = useCallback(async () => {
+    const p = hostKeyPromptRef.current;
+    if (!p) return;
+    await ipc.trustHostKey(p.label, p.got).catch(() => {});
+    setHostKeyPrompt(null);
+    const s = serversRef.current.find((x) => x.id === p.serverId);
+    if (s) setTimeout(() => void pollServer(s), 50);
+  }, [pollServer]);
+
+  const importServers = useCallback((incoming: ServerCfg[]) => {
+    setServers((ss) => {
+      const seen = new Set(ss.map((s) => `${s.host}:${s.port}`));
+      const fresh = incoming.filter((s) => !seen.has(`${s.host}:${s.port}`));
+      setRuntimes((r) => {
+        const next = { ...r };
+        fresh.forEach((s) => (next[s.id] = emptyRuntime()));
+        return next;
+      });
+      if (fresh.length) toast(`Импортировано серверов: ${fresh.length}`);
+      return [...ss, ...fresh];
+    });
+    setImportOpen(false);
+  }, [toast]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -289,6 +353,7 @@ function AppInner() {
           onCollapse={() => setCollapsed(true)}
           onOpenTab={openTab}
           onAdd={() => setServerModal("new")}
+          onImport={() => setImportOpen(true)}
           onEdit={(s) => setServerModal(s)}
           onPalette={() => setPalette(true)}
           onSnippets={() => openTab(null, "snippets")}
@@ -318,6 +383,7 @@ function AppInner() {
               server={srv}
               runtime={runtimes[srv.id] ?? emptyRuntime()}
               visible={t.id === activeTabId}
+              onAuthError={handleAuthError}
             />
           );
         })}
@@ -357,6 +423,17 @@ function AppInner() {
           onSave={saveServer}
           onDelete={deleteServer}
         />
+      )}
+
+      {importOpen && (
+        <ImportModal existing={servers} onClose={() => setImportOpen(false)} onImport={importServers} />
+      )}
+
+      {secretPrompt && (
+        <SecretPrompt req={secretPrompt} onSubmit={submitSecret} onCancel={() => setSecretPrompt(null)} />
+      )}
+      {hostKeyPrompt && (
+        <HostKeyDialog req={hostKeyPrompt} onAccept={acceptHostKey} onReject={() => setHostKeyPrompt(null)} />
       )}
 
       <ToastHost toasts={toasts} />

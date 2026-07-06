@@ -21,8 +21,10 @@ export function SnippetsView({ snippets, setSnippets, servers, runtimes, toast }
   const [results, setResults] = useState<SnippetResult[]>([]);
   const [running, setRunning] = useState(false);
   const [editor, setEditor] = useState<{ title: string; cmd: string; tags: string } | null>(null);
+  const [sudoPw, setSudoPw] = useState("");
 
   const active = snippets.find((s) => s.id === activeId) ?? null;
+  const needsSudo = !!active && /\bsudo\b/.test(active.cmd);
   const online = servers.filter((s) => runtimes[s.id]?.status === "online");
   const selectedIds = online.filter((s) => targets[s.id]).map((s) => s.id);
 
@@ -41,11 +43,15 @@ export function SnippetsView({ snippets, setSnippets, servers, runtimes, toast }
     if (!active || !selectedIds.length || running) return;
     setRunning(true);
     const targetsList = servers.filter((s) => selectedIds.includes(s.id));
+    if (needsSudo && sudoPw)
+      await Promise.all(targetsList.map((s) => ipc.provideSecret(`sudo:${s.id}`, sudoPw).catch(() => {})));
     setResults(targetsList.map((s) => ({ serverId: s.id, name: s.name, running: true })));
     await Promise.all(
       targetsList.map(async (s) => {
         try {
-          const r = await ipc.exec(s, active.cmd);
+          const r = /\bsudo\b/.test(active.cmd)
+            ? await ipc.execPty(s, active.cmd)
+            : await ipc.exec(s, active.cmd);
           setResults((rs) =>
             rs.map((x) =>
               x.serverId === s.id
@@ -144,6 +150,21 @@ export function SnippetsView({ snippets, setSnippets, servers, runtimes, toast }
                   {running ? t("Выполняется…") : t("▸ Выполнить")}
                 </div>
               </div>
+              {needsSudo && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
+                  <span style={{ fontSize: 11, color: "var(--yellow)", whiteSpace: "nowrap" }}>sudo</span>
+                  <input
+                    type="password"
+                    style={{ maxWidth: 260, padding: "5px 9px", fontSize: 12 }}
+                    placeholder={t("sudo-пароль (в памяти)")}
+                    value={sudoPw}
+                    onChange={(e) => setSudoPw(e.target.value)}
+                  />
+                  <span style={{ fontSize: 10.5, color: "var(--dim)" }}>
+                    {t("подставится при запросе пароля")}
+                  </span>
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {online.map((s) => (
                   <div

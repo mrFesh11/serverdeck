@@ -11,6 +11,7 @@ interface Props {
   server: ServerCfg;
   runtime: Runtime;
   visible: boolean;
+  onAuthError: (server: ServerCfg, err: unknown) => string | null;
 }
 
 export const TerminalPane = memo(
@@ -22,7 +23,7 @@ export const TerminalPane = memo(
     a.runtime.latency === b.runtime.latency
 );
 
-function TerminalPaneInner({ tab, server, runtime, visible }: Props) {
+function TerminalPaneInner({ tab, server, runtime, visible, onAuthError }: Props) {
   const t = useT();
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -83,8 +84,9 @@ function TerminalPaneInner({ tab, server, runtime, visible }: Props) {
     });
     listen<string | null>(`term-closed-${tab.id}`, (ev) => {
       if (ev.payload) {
-        term.writeln(`\r\n\x1b[31m${ev.payload}\x1b[0m`);
-        setClosed(ev.payload);
+        const friendly = onAuthError(server, ev.payload);
+        term.writeln(`\r\n\x1b[31m${friendly ?? ev.payload}\x1b[0m`);
+        setClosed(friendly ?? ev.payload);
       } else {
         term.writeln(`\r\n\x1b[90m${t("Сессия завершена")}\x1b[0m`);
         setClosed("closed");

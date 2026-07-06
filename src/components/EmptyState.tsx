@@ -5,7 +5,7 @@ export function EmptyState({ onAdd }: { onAdd: () => void }) {
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 18, padding: 40 }}>
       <div style={{ width: 56, height: 56, borderRadius: 14, background: "var(--panel)", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 600, color: "var(--accent)" }}>
-        S
+        N
       </div>
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 19, fontWeight: 600, marginBottom: 8 }}>{t("Ещё нет серверов")}</div>

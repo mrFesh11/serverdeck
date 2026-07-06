@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ExecOut, FileEntry, ServerCfg, Snippet } from "./types";
+import type { ExecOut, FileEntry, ParsedHost, ServerCfg, Snippet } from "./types";
 
 export interface AppConfig {
   servers: ServerCfg[];
@@ -10,6 +10,11 @@ export const ipc = {
   loadConfig: () => invoke<AppConfig | null>("load_config"),
   saveConfig: (cfg: AppConfig) => invoke<void>("save_config", { cfg }),
   exec: (cfg: ServerCfg, cmd: string) => invoke<ExecOut>("ssh_exec", { cfg, cmd }),
+  execPty: (cfg: ServerCfg, cmd: string) => invoke<ExecOut>("ssh_exec_pty", { cfg, cmd }),
+  provideSecret: (key: string, value: string) => invoke<void>("provide_secret", { key, value }),
+  trustHostKey: (label: string, fingerprint: string) =>
+    invoke<void>("trust_host_key", { label, fingerprint }),
+  importSshConfig: () => invoke<ParsedHost[]>("import_ssh_config"),
   testConnection: (cfg: ServerCfg) => invoke<number>("test_connection", { cfg }),
   sftpList: (cfg: ServerCfg, path: string) => invoke<FileEntry[]>("sftp_list", { cfg, path }),
   sftpPreview: (cfg: ServerCfg, path: string) =>

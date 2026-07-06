@@ -1,10 +1,13 @@
 export type Status = "unknown" | "connecting" | "online" | "offline";
 
+export type AuthMethod = "key" | "password" | "agent";
+
 export interface JumpCfg {
   host: string;
   port: number;
   user: string;
   keyPath: string;
+  auth: AuthMethod;
 }
 
 export interface ServerCfg {
@@ -14,7 +17,17 @@ export interface ServerCfg {
   port: number;
   user: string;
   keyPath: string;
+  auth: AuthMethod;
   jump?: JumpCfg | null;
+}
+
+export interface ParsedHost {
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  keyPath: string;
+  proxyJump: string;
 }
 
 export interface Container {
