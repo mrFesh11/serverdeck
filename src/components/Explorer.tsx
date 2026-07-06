@@ -92,8 +92,48 @@ export function Explorer({ server, toast }: Props) {
   const [query, setQuery] = useState("");
   const [deepResults, setDeepResults] = useState<{ type: string; size: number; path: string }[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [editor, setEditor] = useState<{ name: string; path: string; content: string; original: string; loading: boolean; saving: boolean } | null>(null);
+  const [vScroll, setVScroll] = useState(0);
+  const [vHeight, setVHeight] = useState(600);
+  const scrollBodyRef = useRef<HTMLDivElement>(null);
   const pathRef = useRef(path);
   pathRef.current = path;
+
+  useEffect(() => {
+    const el = scrollBodyRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setVHeight(el.clientHeight));
+    ro.observe(el);
+    setVHeight(el.clientHeight);
+    return () => ro.disconnect();
+  }, [state, view]);
+
+  const openEditor = async (f: FileEntry) => {
+    setMenu(null);
+    const full = joinPath(path, f.name);
+    setEditor({ name: f.name, path: full, content: "", original: "", loading: true, saving: false });
+    try {
+      const text = await ipc.sftpReadText(server, full);
+      setEditor({ name: f.name, path: full, content: text, original: text, loading: false, saving: false });
+    } catch (e) {
+      setEditor(null);
+      toast(`${t("Ошибка:")} ${e}`, true);
+    }
+  };
+
+  const saveEditor = async () => {
+    if (!editor || editor.saving) return;
+    setEditor({ ...editor, saving: true });
+    try {
+      await ipc.sftpWriteText(server, editor.path, editor.content);
+      toast(t("Сохранено"));
+      setEditor(null);
+      void load(pathRef.current);
+    } catch (e) {
+      setEditor((ed) => (ed ? { ...ed, saving: false } : ed));
+      toast(`${t("Ошибка:")} ${e}`, true);
+    }
+  };
 
   const load = useCallback(
     async (p: string) => {
@@ -537,41 +577,58 @@ export function Explorer({ server, toast }: Props) {
                 <span className="ex-th" onClick={() => clickSort("owner")}>{t("Владелец")}{arw("owner")}</span>
                 <span className="ex-th" style={{ textAlign: "right" }} onClick={() => clickSort("mtime")}>{t("Изменён")}{arw("mtime")}</span>
               </div>
-              <div style={{ flex: 1, overflowY: "auto", padding: "3px 0" }}>
-                {visible.map((f) => (
-                  <div
-                    key={f.name}
-                    className={"ex-trow" + (selected[f.name] ? " selected" : "") + (f.hidden ? " hidden-f" : "")}
-                    onClick={() => selectFile(f)}
-                    onDoubleClick={() => openEntry(f)}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      if (!selected[f.name]) setSelected({ [f.name]: true });
-                      setPreview(f);
-                      setMenu({ f, x: e.clientX, y: e.clientY });
-                    }}
-                  >
-                    <span
-                      style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleCheck(f);
-                      }}
-                    >
-                      <span className={"check" + (selected[f.name] ? " on" : "")}>{selected[f.name] ? "✓" : ""}</span>
-                    </span>
-                    <span className="fname" style={{ color: f.hidden ? "#6a7079" : f.ftype === "dir" ? "#a3cdb4" : "var(--body)" }}>
-                      <FIcon f={f} />
-                      <span>{f.name}</span>
-                    </span>
-                    <span className="mono" style={{ fontSize: 11, color: "var(--muted)", textAlign: "right" }}>
-                      {f.ftype === "dir" ? "—" : fmtBytes(f.size)}
-                    </span>
-                    <span className="mono" style={{ fontSize: 11, color: "#6a7079" }}>{f.perms}</span>
-                    <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>{f.owner}</span>
-                    <span className="mono" style={{ fontSize: 11, color: "#6a7079", textAlign: "right" }}>{fmtMtime(f.mtime)}</span>
-                  </div>
-                ))}
+              <div
+                ref={scrollBodyRef}
+                style={{ flex: 1, overflowY: "auto", padding: "3px 0" }}
+                onScroll={(e) => visible.length > 80 && setVScroll(e.currentTarget.scrollTop)}
+              >
+                {(() => {
+                  const ROW = 30;
+                  const total = visible.length;
+                  const virtual = total > 80;
+                  const start = virtual ? Math.max(0, Math.floor(vScroll / ROW) - 6) : 0;
+                  const end = virtual ? Math.min(total, Math.ceil((vScroll + vHeight) / ROW) + 6) : total;
+                  return (
+                    <>
+                      {virtual && start > 0 && <div style={{ height: start * ROW }} />}
+                      {visible.slice(start, end).map((f) => (
+                        <div
+                          key={f.name}
+                          className={"ex-trow" + (selected[f.name] ? " selected" : "") + (f.hidden ? " hidden-f" : "")}
+                          onClick={() => selectFile(f)}
+                          onDoubleClick={() => openEntry(f)}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            if (!selected[f.name]) setSelected({ [f.name]: true });
+                            setPreview(f);
+                            setMenu({ f, x: e.clientX, y: e.clientY });
+                          }}
+                        >
+                          <span
+                            style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleCheck(f);
+                            }}
+                          >
+                            <span className={"check" + (selected[f.name] ? " on" : "")}>{selected[f.name] ? "✓" : ""}</span>
+                          </span>
+                          <span className="fname" style={{ color: f.hidden ? "#6a7079" : f.ftype === "dir" ? "#a3cdb4" : "var(--body)" }}>
+                            <FIcon f={f} />
+                            <span>{f.name}</span>
+                          </span>
+                          <span className="mono" style={{ fontSize: 11, color: "var(--muted)", textAlign: "right" }}>
+                            {f.ftype === "dir" ? "—" : fmtBytes(f.size)}
+                          </span>
+                          <span className="mono" style={{ fontSize: 11, color: "#6a7079" }}>{f.perms}</span>
+                          <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>{f.owner}</span>
+                          <span className="mono" style={{ fontSize: 11, color: "#6a7079", textAlign: "right" }}>{fmtMtime(f.mtime)}</span>
+                        </div>
+                      ))}
+                      {virtual && end < total && <div style={{ height: (total - end) * ROW }} />}
+                    </>
+                  );
+                })()}
                 {visible.length === 0 && (
                   <div className="ex-state" style={{ padding: 40 }}>
                     <div style={{ width: 46, height: 38, borderRadius: 8, border: "1.5px dashed #2a2e36" }} />
@@ -584,7 +641,7 @@ export function Explorer({ server, toast }: Props) {
 
           {!searching && !deepResults && state === "ready" && view === "grid" && (
             <div className="ex-grid">
-              {visible.map((f) => (
+              {visible.slice(0, 600).map((f) => (
                 <div
                   key={f.name}
                   className={"ex-tile" + (selected[f.name] ? " selected" : "") + (f.hidden ? " hidden-f" : "")}
@@ -600,6 +657,11 @@ export function Explorer({ server, toast }: Props) {
                   <span style={{ color: f.hidden ? "#6a7079" : f.ftype === "dir" ? "#a3cdb4" : "var(--body)" }}>{f.name}</span>
                 </div>
               ))}
+              {visible.length > 600 && (
+                <div style={{ gridColumn: "1 / -1", padding: 12, fontSize: 11.5, color: "var(--dim)", textAlign: "center" }}>
+                  {t("Показаны первые 600 — переключитесь в таблицу для полного списка")}
+                </div>
+              )}
             </div>
           )}
 
@@ -684,7 +746,10 @@ export function Explorer({ server, toast }: Props) {
                   )}
                 </div>
                 <div style={{ flex: "none", padding: "12px 14px", borderTop: "1px solid var(--border2)", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                  <div className="btn-primary" onClick={() => void download([preview])}>{t("↓ Скачать")}</div>
+                  {preview.ftype === "file" && (
+                    <div className="btn-primary" onClick={() => void openEditor(preview)}>✎ {t("Редактировать")}</div>
+                  )}
+                  <div className="btn-ghost" onClick={() => void download([preview])}>{t("↓ Скачать")}</div>
                   <div className="btn-ghost" onClick={() => setModal({ kind: "chmod", files: [preview], value: preview.perms.slice(1).replace(/[^rwx-]/g, "") ? octalOf(preview.perms) : "644" })}>chmod</div>
                   <div className="btn-ghost" onClick={() => setModal({ kind: "rename", files: [preview], value: preview.name })}>{t("Переименовать")}</div>
                   <div className="btn-danger" onClick={() => setModal({ kind: "delete", files: [preview], value: "" })}>{t("Удалить")}</div>
@@ -745,6 +810,12 @@ export function Explorer({ server, toast }: Props) {
               <span style={{ width: 16, textAlign: "center", color: "var(--muted)" }}>↓</span>
               <span>{t("Скачать")}</span>
             </div>
+            {menu.f.ftype === "file" && (
+              <div className="ctx-item" onClick={() => void openEditor(menu.f)}>
+                <span style={{ width: 16, textAlign: "center", color: "var(--muted)" }}>✎</span>
+                <span>{t("Редактировать")}</span>
+              </div>
+            )}
             <div className="ctx-item" onClick={() => { setModal({ kind: "rename", files: [menu.f], value: menu.f.name }); setMenu(null); }}>
               <span style={{ width: 16, textAlign: "center", color: "var(--muted)" }}>✎</span>
               <span>{t("Переименовать")}</span>
@@ -776,6 +847,54 @@ export function Explorer({ server, toast }: Props) {
             </div>
           </div>
         </>
+      )}
+
+      {editor && (
+        <div className="overlay" onClick={() => !editor.saving && setEditor(null)}>
+          <div
+            className="modal"
+            style={{ width: "min(900px, 88vw)", height: "82vh", display: "flex", flexDirection: "column" }}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+                e.preventDefault();
+                void saveEditor();
+              }
+            }}
+          >
+            <div className="modal-head">
+              <span className="mono" style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {editor.path}
+                {editor.content !== editor.original && <span style={{ color: "var(--yellow)" }}> ●</span>}
+              </span>
+              <span className="modal-x" onClick={() => !editor.saving && setEditor(null)}>×</span>
+            </div>
+            {editor.loading ? (
+              <div className="ex-state" style={{ flex: 1 }}>
+                <span className="spin" style={{ width: 16, height: 16 }} />
+                <span style={{ color: "var(--muted)" }}>{t("загрузка файла…")}</span>
+              </div>
+            ) : (
+              <textarea
+                className="mono editor-area"
+                autoFocus
+                spellCheck={false}
+                value={editor.content}
+                onChange={(e) => setEditor({ ...editor, content: e.target.value })}
+              />
+            )}
+            <div className="modal-foot">
+              <span style={{ flex: 1 }} />
+              <div className="btn-text" onClick={() => !editor.saving && setEditor(null)}>{t("Отмена")}</div>
+              <div
+                className={"btn-accent" + (editor.saving || editor.loading || editor.content === editor.original ? " disabled" : "")}
+                onClick={() => void saveEditor()}
+              >
+                {editor.saving ? "…" : t("Сохранить (Ctrl+S)")}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {modal && (
