@@ -129,6 +129,7 @@ const RU_EN: Record<string, string> = {
   "Пользователь": "User",
   "SSH-ключ (пусто — ssh-agent)": "SSH key (empty — ssh-agent)",
   "Выбрать…": "Browse…",
+  "Выбор SSH-ключа": "Select SSH key",
   "Тест соединения": "Test connection",
   "Проверка…": "Testing…",
   "✓ Соединение установлено": "✓ Connected",
