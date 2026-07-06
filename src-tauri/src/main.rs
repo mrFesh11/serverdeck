@@ -2,6 +2,7 @@
 
 mod ssh;
 mod term;
+mod vault;
 
 use base64::Engine;
 use serde::Serialize;
@@ -11,7 +12,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use term::{TermMap, TermMsg};
 
 struct AppState {
@@ -98,6 +99,113 @@ async fn ssh_exec_pty(
 #[tauri::command]
 fn provide_secret(key: String, value: String) {
     ssh::set_secret(key, value);
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultStatus {
+    exists: bool,
+    unlocked: bool,
+}
+
+#[tauri::command]
+fn vault_status() -> VaultStatus {
+    VaultStatus {
+        exists: vault::exists(),
+        unlocked: vault::is_unlocked(),
+    }
+}
+
+#[tauri::command]
+fn vault_create(password: String) -> Result<(), String> {
+    vault::create(&password)
+}
+
+#[tauri::command]
+fn vault_unlock(password: String) -> Result<(), String> {
+    let secrets = vault::unlock(&password)?;
+    for (k, v) in secrets {
+        ssh::set_secret(k, v);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn vault_store(id: String, value: String) -> Result<(), String> {
+    ssh::set_secret(id.clone(), value.clone());
+    vault::store(&id, &value)
+}
+
+#[tauri::command]
+fn vault_forget(id: String) -> Result<(), String> {
+    vault::forget(&id)
+}
+
+#[tauri::command]
+fn vault_lock() {
+    vault::lock();
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceUnit {
+    name: String,
+    load: String,
+    active: String,
+    sub: String,
+    desc: String,
+}
+
+#[tauri::command]
+async fn list_services(
+    state: State<'_, AppState>,
+    cfg: ServerCfg,
+) -> Result<Vec<ServiceUnit>, String> {
+    let controls = state.controls.clone();
+    blocking(move || {
+        ssh::with_session(&controls, &cfg, |s| {
+            let res = ssh::exec(
+                s,
+                "systemctl list-units --type=service --all --no-legend --no-pager --plain 2>/dev/null",
+            )?;
+            Ok(res
+                .out
+                .lines()
+                .filter_map(|l| {
+                    let p: Vec<&str> = l.split_whitespace().collect();
+                    if p.len() < 4 || !p[0].ends_with(".service") {
+                        return None;
+                    }
+                    Some(ServiceUnit {
+                        name: p[0].trim_end_matches(".service").to_string(),
+                        load: p[1].to_string(),
+                        active: p[2].to_string(),
+                        sub: p[3].to_string(),
+                        desc: p[4..].join(" "),
+                    })
+                })
+                .collect())
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn systemd_action(
+    state: State<'_, AppState>,
+    cfg: ServerCfg,
+    action: String,
+    unit: String,
+) -> Result<ExecOut, String> {
+    let allowed = ["start", "stop", "restart", "reload", "status", "enable", "disable"];
+    if !allowed.contains(&action.as_str()) {
+        return Err(format!("недопустимое действие: {action}"));
+    }
+    let quoted = format!("'{}'", unit.replace('\'', r"'\''"));
+    let flags = if action == "status" { " --no-pager -l" } else { "" };
+    let cmd = format!("systemctl {action} {quoted}{flags} 2>&1");
+    let controls = state.controls.clone();
+    blocking(move || ssh::with_session(&controls, &cfg, |s| ssh::exec(s, &cmd))).await
 }
 
 #[tauri::command]
@@ -287,6 +395,134 @@ async fn sftp_upload(
             std::io::copy(&mut src, &mut dst).map_err(|e| e.to_string())?;
             dst.flush().ok();
             Ok(())
+        })
+    })
+    .await
+}
+
+fn count_local_files(dir: &Path) -> usize {
+    let mut n = 0;
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                n += count_local_files(&p);
+            } else {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+fn upload_dir_rec(
+    app: &AppHandle,
+    sftp: &ssh2::Sftp,
+    local: &Path,
+    remote: &str,
+    total: usize,
+    done: &mut usize,
+) -> Result<(), String> {
+    sftp.mkdir(Path::new(remote), 0o755).ok();
+    for entry in std::fs::read_dir(local).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let child_remote = format!("{}/{}", remote.trim_end_matches('/'), name);
+        if entry.path().is_dir() {
+            upload_dir_rec(app, sftp, &entry.path(), &child_remote, total, done)?;
+        } else {
+            let mut src = std::fs::File::open(entry.path()).map_err(|e| e.to_string())?;
+            let mut dst = sftp.create(Path::new(&child_remote)).map_err(|e| e.to_string())?;
+            std::io::copy(&mut src, &mut dst).map_err(|e| e.to_string())?;
+            *done += 1;
+            let _ = app.emit("transfer-progress", (done.clone(), total, name));
+        }
+    }
+    Ok(())
+}
+
+fn download_dir_rec(
+    app: &AppHandle,
+    sftp: &ssh2::Sftp,
+    remote: &str,
+    local: &Path,
+    total: usize,
+    done: &mut usize,
+) -> Result<(), String> {
+    std::fs::create_dir_all(local).map_err(|e| e.to_string())?;
+    let list = sftp.readdir(Path::new(remote)).map_err(|e| e.to_string())?;
+    for (p, st) in list {
+        let name = match p.file_name() {
+            Some(n) => n.to_string_lossy().into_owned(),
+            None => continue,
+        };
+        let child_remote = format!("{}/{}", remote.trim_end_matches('/'), name);
+        let child_local = local.join(&name);
+        if st.is_dir() {
+            download_dir_rec(app, sftp, &child_remote, &child_local, total, done)?;
+        } else {
+            let mut src = sftp.open(Path::new(&child_remote)).map_err(|e| e.to_string())?;
+            let mut dst = std::fs::File::create(&child_local).map_err(|e| e.to_string())?;
+            std::io::copy(&mut src, &mut dst).map_err(|e| e.to_string())?;
+            *done += 1;
+            let _ = app.emit("transfer-progress", (done.clone(), total, name));
+        }
+    }
+    Ok(())
+}
+
+fn count_remote_files(sftp: &ssh2::Sftp, remote: &str) -> usize {
+    let mut n = 0;
+    if let Ok(list) = sftp.readdir(Path::new(remote)) {
+        for (p, st) in list {
+            let name = p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            if st.is_dir() {
+                n += count_remote_files(sftp, &format!("{}/{}", remote.trim_end_matches('/'), name));
+            } else {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+#[tauri::command]
+async fn sftp_upload_dir(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    cfg: ServerCfg,
+    local: String,
+    remote: String,
+) -> Result<usize, String> {
+    let controls = state.controls.clone();
+    blocking(move || {
+        ssh::with_session(&controls, &cfg, |sess| {
+            let sftp = sess.sftp().map_err(|e| e.to_string())?;
+            let total = count_local_files(Path::new(&local));
+            let mut done = 0;
+            upload_dir_rec(&app, &sftp, Path::new(&local), &remote, total, &mut done)?;
+            Ok(done)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn sftp_download_dir(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    cfg: ServerCfg,
+    remote: String,
+    local: String,
+) -> Result<usize, String> {
+    let controls = state.controls.clone();
+    blocking(move || {
+        ssh::with_session(&controls, &cfg, |sess| {
+            let sftp = sess.sftp().map_err(|e| e.to_string())?;
+            let total = count_remote_files(&sftp, &remote);
+            let mut done = 0;
+            download_dir_rec(&app, &sftp, &remote, Path::new(&local), total, &mut done)?;
+            Ok(done)
         })
     })
     .await
@@ -540,6 +776,7 @@ fn main() {
             if let Ok(dir) = app.path().app_config_dir() {
                 std::fs::create_dir_all(&dir).ok();
                 let _ = ssh::KNOWN_HOSTS.set(dir.join("known_hosts"));
+                let _ = vault::VAULT_PATH.set(dir.join("vault.bin"));
             }
             Ok(())
         })
@@ -558,7 +795,15 @@ fn main() {
             ssh_exec,
             ssh_exec_pty,
             docker_action,
+            systemd_action,
+            list_services,
             provide_secret,
+            vault_status,
+            vault_create,
+            vault_unlock,
+            vault_store,
+            vault_forget,
+            vault_lock,
             trust_host_key,
             import_ssh_config,
             test_connection,
@@ -567,6 +812,8 @@ fn main() {
             sftp_read_text,
             sftp_write_text,
             sftp_download,
+            sftp_upload_dir,
+            sftp_download_dir,
             sftp_upload,
             sftp_rename,
             sftp_delete,

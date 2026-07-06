@@ -21,6 +21,38 @@ export interface ServerCfg {
   jump?: JumpCfg | null;
 }
 
+export interface Settings {
+  pollIntervalSec: number;
+  notifyOffline: boolean;
+  notifyThresholds: boolean;
+  cpuThreshold: number;
+  ramThreshold: number;
+  diskThreshold: number;
+  accent: string;
+}
+
+export const DEFAULT_SETTINGS: Settings = {
+  pollIntervalSec: 7,
+  notifyOffline: true,
+  notifyThresholds: true,
+  cpuThreshold: 90,
+  ramThreshold: 90,
+  diskThreshold: 90,
+  accent: "#46a86e",
+};
+
+export function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.replace("#", "");
+  const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+export function applyAccent(accent: string) {
+  const root = document.documentElement;
+  root.style.setProperty("--accent", accent);
+  root.style.setProperty("--accent-soft", hexToRgba(accent, 0.16));
+}
+
 export interface ParsedHost {
   name: string;
   host: string;
@@ -73,7 +105,7 @@ export interface Snippet {
   tags: string[];
 }
 
-export type TabMode = "terminal" | "overview" | "explorer" | "files" | "snippets";
+export type TabMode = "terminal" | "overview" | "explorer" | "files" | "snippets" | "dashboard";
 
 export interface Tab {
   id: string;
@@ -113,6 +145,7 @@ export const MODE_LABEL: Record<TabMode, string> = {
   explorer: "Проводник",
   files: "Файлы",
   snippets: "Библиотека",
+  dashboard: "Дашборд",
 };
 
 export const C = {

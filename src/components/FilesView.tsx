@@ -39,8 +39,18 @@ export function FilesView({ server, toast }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [transfers, setTransfers] = useState(0);
   const [dragOver, setDragOver] = useState(false);
+  const [prog, setProg] = useState<{ done: number; total: number; name: string } | null>(null);
   const remoteRef = useRef(remotePath);
   remoteRef.current = remotePath;
+
+  useEffect(() => {
+    const un = getCurrentWebview().listen<[number, number, string]>("transfer-progress", (e) => {
+      setProg({ done: e.payload[0], total: e.payload[1], name: e.payload[2] });
+    });
+    return () => {
+      void un.then((u) => u());
+    };
+  }, []);
 
   const loadLocal = useCallback(async (p: string) => {
     try {
@@ -100,34 +110,46 @@ export function FilesView({ server, toast }: Props) {
   const upload = async () => {
     if (!localSel) return;
     const f = localFiles.find((x) => x.name === localSel);
-    if (!f || f.ftype === "dir") return;
+    if (!f) return;
     try {
       setBusy(f.name);
-      await ipc.sftpUpload(server, join(localPath, f.name), join(remotePath, f.name));
+      if (f.ftype === "dir") {
+        const n = await ipc.sftpUploadDir(server, join(localPath, f.name), join(remotePath, f.name));
+        toast(`${t("Загружено:")} ${f.name} (${n})`);
+      } else {
+        await ipc.sftpUpload(server, join(localPath, f.name), join(remotePath, f.name));
+        toast(`${t("Загружено:")} ${f.name}`);
+      }
       setTransfers((n) => n + 1);
-      toast(`${t("Загружено:")} ${f.name}`);
       void loadRemote(remotePath);
     } catch (e) {
-      toast(`Ошибка: ${e}`, true);
+      toast(`${t("Ошибка:")} ${e}`, true);
     } finally {
       setBusy(null);
+      setProg(null);
     }
   };
 
   const download = async () => {
     if (!remoteSel) return;
     const f = remoteFiles.find((x) => x.name === remoteSel);
-    if (!f || f.ftype === "dir") return;
+    if (!f) return;
     try {
       setBusy(f.name);
-      await ipc.sftpDownload(server, join(remotePath, f.name), join(localPath, f.name));
+      if (f.ftype === "dir") {
+        const n = await ipc.sftpDownloadDir(server, join(remotePath, f.name), join(localPath, f.name));
+        toast(`${t("Скачано:")} ${f.name} (${n})`);
+      } else {
+        await ipc.sftpDownload(server, join(remotePath, f.name), join(localPath, f.name));
+        toast(`${t("Скачано:")} ${f.name} → ${localPath}`);
+      }
       setTransfers((n) => n + 1);
-      toast(`${t("Скачано:")} ${f.name} → ${localPath}`);
       void loadLocal(localPath);
     } catch (e) {
-      toast(`Ошибка: ${e}`, true);
+      toast(`${t("Ошибка:")} ${e}`, true);
     } finally {
       setBusy(null);
+      setProg(null);
     }
   };
 
@@ -170,7 +192,13 @@ export function FilesView({ server, toast }: Props) {
           {t("← Скачать")}
         </div>
         <span style={{ fontSize: 11, color: "var(--dim)", marginLeft: 8 }}>
-          {busy ? `${t("передача:")} ${busy}…` : transfers ? `${transfers} ${t("передач завершено")}` : ""}
+          {busy
+            ? prog
+              ? `${prog.done}/${prog.total} · ${prog.name}`
+              : `${t("передача:")} ${busy}…`
+            : transfers
+            ? `${transfers} ${t("передач завершено")}`
+            : ""}
         </span>
       </div>
 

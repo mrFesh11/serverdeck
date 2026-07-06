@@ -20,6 +20,8 @@ interface SidebarProps {
   onEdit: (s: ServerCfg) => void;
   onPalette: () => void;
   onSnippets: () => void;
+  onDashboard: () => void;
+  onSettings: () => void;
 }
 
 export function Sidebar(p: SidebarProps) {
@@ -38,18 +40,20 @@ export function Sidebar(p: SidebarProps) {
           {lang.toUpperCase()}
         </div>
         <div className="kbd" title={t("Команды (Ctrl+K)")} onClick={p.onPalette}>⌘K</div>
+        <div className="sb-collapse" title={t("Настройки")} onClick={p.onSettings} style={{ fontSize: 14 }}>⚙</div>
         <div className="sb-collapse" title={t("Свернуть")} onClick={p.onCollapse}>‹</div>
       </div>
 
       <div style={{ padding: "10px 12px 4px" }}>
         <div className="sb-add" onClick={p.onAdd}>{t("+ Добавить сервер")}</div>
       </div>
-      <div style={{ padding: "0 12px 8px", textAlign: "center" }}>
-        <span
-          style={{ fontSize: 11, color: "var(--dim)", cursor: "pointer" }}
-          onClick={p.onImport}
-        >
-          {t("Импорт из ~/.ssh/config")}
+      <div style={{ display: "flex", gap: 8, padding: "0 12px 8px", justifyContent: "center" }}>
+        <span style={{ fontSize: 11, color: "var(--accent)", cursor: "pointer" }} onClick={p.onDashboard}>
+          {t("Дашборд")}
+        </span>
+        <span style={{ color: "var(--dimmer)" }}>·</span>
+        <span style={{ fontSize: 11, color: "var(--dim)", cursor: "pointer" }} onClick={p.onImport}>
+          {t("Импорт ssh-config")}
         </span>
       </div>
 

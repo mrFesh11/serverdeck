@@ -10,15 +10,18 @@ export interface SecretReq {
 
 export function SecretPrompt({
   req,
+  vaultUnlocked,
   onSubmit,
   onCancel,
 }: {
   req: SecretReq;
-  onSubmit: (value: string) => void;
+  vaultUnlocked: boolean;
+  onSubmit: (value: string, remember: boolean) => void;
   onCancel: () => void;
 }) {
   const t = useT();
   const [value, setValue] = useState("");
+  const [remember, setRemember] = useState(false);
   const label =
     req.kind === "password"
       ? t("Пароль для входа")
@@ -47,17 +50,24 @@ export function SecretPrompt({
               autoFocus
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && value && onSubmit(value)}
+              onKeyDown={(e) => e.key === "Enter" && value && onSubmit(value, remember)}
             />
           </div>
-          <div style={{ fontSize: 11, color: "var(--dim)" }}>
-            {t("Хранится только в памяти до закрытия приложения, на диск не пишется.")}
-          </div>
+          {vaultUnlocked ? (
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)", cursor: "pointer" }}>
+              <span className={"check" + (remember ? " on" : "")} onClick={() => setRemember(!remember)}>{remember ? "✓" : ""}</span>
+              {t("Запомнить в зашифрованном хранилище")}
+            </label>
+          ) : (
+            <div style={{ fontSize: 11, color: "var(--dim)" }}>
+              {t("Хранится только в памяти до закрытия приложения, на диск не пишется.")}
+            </div>
+          )}
         </div>
         <div className="modal-foot">
           <span style={{ flex: 1 }} />
           <div className="btn-text" onClick={onCancel}>{t("Отмена")}</div>
-          <div className={"btn-accent" + (value ? "" : " disabled")} onClick={() => value && onSubmit(value)}>
+          <div className={"btn-accent" + (value ? "" : " disabled")} onClick={() => value && onSubmit(value, remember)}>
             {t("Подключиться")}
           </div>
         </div>

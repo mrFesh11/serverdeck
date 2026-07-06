@@ -3,7 +3,8 @@ import { ipc } from "./ipc";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { LangContext, loadLang, storeLang, useT, type Lang } from "./i18n";
 import { metricsCmd, parseMetrics } from "./metrics";
-import type { Runtime, ServerCfg, Snippet, Status, Tab, TabMode } from "./types";
+import type { Runtime, ServerCfg, Settings, Snippet, Status, Tab, TabMode } from "./types";
+import { DEFAULT_SETTINGS, applyAccent } from "./types";
 import { Sidebar, Rail } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { TerminalPane } from "./components/TerminalPane";
@@ -18,6 +19,8 @@ import { ToastHost, useToasts } from "./components/Toasts";
 import { SecretPrompt, HostKeyDialog, type SecretReq, type HostKeyReq } from "./components/AuthDialogs";
 import { ImportModal } from "./components/ImportModal";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { SettingsModal } from "./components/SettingsModal";
+import { Dashboard } from "./components/Dashboard";
 import { parseAuthError } from "./authFlow";
 
 export const uid = () => Math.random().toString(36).slice(2, 10);
@@ -78,7 +81,16 @@ function AppInner() {
   const [palette, setPalette] = useState(false);
   const [serverModal, setServerModal] = useState<ServerCfg | "new" | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [vaultLocked, setVaultLocked] = useState(false);
+  const [vaultUnlocked, setVaultUnlocked] = useState(false);
+  const [vaultPw, setVaultPw] = useState("");
+  const [vaultErr, setVaultErr] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const alertStateRef = useRef<Record<string, { cpu: boolean; ram: boolean; disk: boolean }>>({});
   const [secretPrompt, setSecretPrompt] = useState<(SecretReq & { serverId: string }) | null>(null);
   const [hostKeyPrompt, setHostKeyPrompt] = useState<(HostKeyReq & { serverId: string }) | null>(null);
   const { toasts, toast } = useToasts();
@@ -95,6 +107,29 @@ function AppInner() {
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
 
+  useEffect(() => {
+    ipc.vaultStatus()
+      .then((v) => {
+        setVaultUnlocked(v.unlocked);
+        if (v.exists && !v.unlocked) setVaultLocked(true);
+      })
+      .catch(() => {});
+  }, []);
+
+  const unlockVault = useCallback(async () => {
+    if (!vaultPw) return;
+    try {
+      await ipc.vaultUnlock(vaultPw);
+      setVaultLocked(false);
+      setVaultUnlocked(true);
+      setVaultPw("");
+      setVaultErr("");
+      serversRef.current.forEach((s) => setTimeout(() => void pollServer(s), 50));
+    } catch (e) {
+      setVaultErr(/WRONG_PASSWORD/.test(String(e)) ? "Неверный пароль" : String(e));
+    }
+  }, [vaultPw]);
+
   const notify = useCallback(async (title: string, body: string) => {
     try {
       let granted = await isPermissionGranted();
@@ -110,6 +145,9 @@ function AppInner() {
       const saved = cfg?.snippets ?? [];
       const ids = new Set(saved.map((s) => s.id));
       setSnippets([...saved, ...DEFAULT_SNIPPETS.filter((s) => !ids.has(s.id))]);
+      const st = { ...DEFAULT_SETTINGS, ...(cfg?.settings ?? {}) };
+      setSettings(st);
+      applyAccent(st.accent);
       setRuntimes(Object.fromEntries(srv.map((s) => [s.id, emptyRuntime()])));
       try {
         const st = JSON.parse(localStorage.getItem("sd-tabs") || "null");
@@ -128,8 +166,12 @@ function AppInner() {
   }, []);
 
   useEffect(() => {
-    if (loaded) ipc.saveConfig({ servers, snippets }).catch(() => {});
-  }, [servers, snippets, loaded]);
+    if (loaded) ipc.saveConfig({ servers, snippets, settings }).catch(() => {});
+  }, [servers, snippets, settings, loaded]);
+
+  useEffect(() => {
+    applyAccent(settings.accent);
+  }, [settings.accent]);
 
   useEffect(() => {
     if (loaded) localStorage.setItem("sd-tabs", JSON.stringify({ tabs, activeTabId }));
@@ -167,7 +209,19 @@ function AppInner() {
       if (rt.status !== "online") setStatus(s.id, "connecting");
       const res = await ipc.exec(s, metricsCmd(!rt.metrics?.cpuSample, docker));
       const m = parseMetrics(res.out, rt.metrics);
-      if (prevStatus === "offline") void notify(`🟢 ${s.name}`, "Сервер снова онлайн");
+      const cfgS = settingsRef.current;
+      if (prevStatus === "offline" && cfgS.notifyOffline) void notify(`🟢 ${s.name}`, "Сервер снова онлайн");
+      if (cfgS.notifyThresholds) {
+        const al = alertStateRef.current[s.id] ?? { cpu: false, ram: false, disk: false };
+        const check = (key: "cpu" | "ram" | "disk", val: number, thr: number, label: string) => {
+          if (val >= thr && !al[key]) void notify(`⚠ ${s.name}`, `${label} ${Math.round(val)}% (порог ${thr}%)`);
+          al[key] = val >= thr;
+        };
+        check("cpu", m.cpu, cfgS.cpuThreshold, "CPU");
+        check("ram", m.ramPct, cfgS.ramThreshold, "RAM");
+        check("disk", m.diskPct, cfgS.diskThreshold, "Диск");
+        alertStateRef.current[s.id] = al;
+      }
       setRuntimes((r) => {
         const cur = r[s.id] ?? emptyRuntime();
         const push = (arr: number[], v: number) => [...arr.slice(-59), v];
@@ -192,7 +246,8 @@ function AppInner() {
       });
     } catch (e) {
       const friendly = handleAuthError(s, e);
-      if (prevStatus === "online") void notify(`🔴 ${s.name}`, friendly ?? "Сервер недоступен");
+      if (prevStatus === "online" && settingsRef.current.notifyOffline)
+        void notify(`🔴 ${s.name}`, friendly ?? "Сервер недоступен");
       setStatus(s.id, "offline", friendly ?? String(e));
     }
   }, [setStatus, handleAuthError, notify]);
@@ -215,13 +270,13 @@ function AppInner() {
     };
     document.addEventListener("visibilitychange", onVisible);
     cycle(true);
-    const iv = setInterval(() => cycle(), 7000);
+    const iv = setInterval(() => cycle(), Math.max(2, settings.pollIntervalSec) * 1000);
     return () => {
       stop = true;
       clearInterval(iv);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [loaded, pollServer]);
+  }, [loaded, pollServer, settings.pollIntervalSec]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 
@@ -273,10 +328,11 @@ function AppInner() {
     ipc.disconnect(id).catch(() => {});
   }, []);
 
-  const submitSecret = useCallback(async (value: string) => {
+  const submitSecret = useCallback(async (value: string, remember: boolean) => {
     const p = secretPromptRef.current;
     if (!p) return;
-    await ipc.provideSecret(p.secretKey, value).catch(() => {});
+    if (remember) await ipc.vaultStore(p.secretKey, value).catch(() => {});
+    else await ipc.provideSecret(p.secretKey, value).catch(() => {});
     setSecretPrompt(null);
     const s = serversRef.current.find((x) => x.id === p.serverId);
     if (s) setTimeout(() => void pollServer(s), 50);
@@ -331,8 +387,10 @@ function AppInner() {
   const viewServer = serverOf(activeTab);
 
   const content = useMemo(() => {
-    if (!activeTab || (activeTab.mode !== "terminal" && !viewServer && activeTab.mode !== "snippets"))
-      return null;
+    if (!activeTab) return null;
+    if (view === "dashboard")
+      return <Dashboard servers={servers} runtimes={runtimes} onOpen={(id) => openTab(id, "overview")} />;
+    if (activeTab.mode !== "terminal" && !viewServer && activeTab.mode !== "snippets") return null;
     switch (view) {
       case "overview":
         return (
@@ -361,7 +419,7 @@ function AppInner() {
       default:
         return null;
     }
-  }, [activeTab?.id, view, viewServer, runtimes, snippets, servers, pollServer, toast]);
+  }, [activeTab?.id, view, viewServer, runtimes, snippets, servers, pollServer, toast, openTab]);
 
   return (
     <div className="app">
@@ -387,6 +445,8 @@ function AppInner() {
           onEdit={(s) => setServerModal(s)}
           onPalette={() => setPalette(true)}
           onSnippets={() => openTab(null, "snippets")}
+          onDashboard={() => openTab(null, "dashboard")}
+          onSettings={() => setSettingsOpen(true)}
         />
       )}
 
@@ -459,8 +519,43 @@ function AppInner() {
         <ImportModal existing={servers} onClose={() => setImportOpen(false)} onImport={importServers} />
       )}
 
+      {settingsOpen && (
+        <SettingsModal settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} toast={toast} />
+      )}
+
+      {vaultLocked && (
+        <div className="overlay" style={{ zIndex: 120 }}>
+          <div className="modal" style={{ width: 400 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">🔒 {t("Хранилище паролей")}</div>
+            <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ fontSize: 12.5, color: "var(--muted)" }}>
+                {t("Введите мастер-пароль, чтобы разблокировать сохранённые секреты.")}
+              </div>
+              {vaultErr && <div style={{ fontSize: 12, color: "var(--red)" }}>{t(vaultErr)}</div>}
+              <input
+                type="password"
+                autoFocus
+                placeholder={t("Мастер-пароль")}
+                value={vaultPw}
+                onChange={(e) => setVaultPw(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void unlockVault()}
+              />
+            </div>
+            <div className="modal-foot">
+              <span style={{ flex: 1 }} />
+              <div className="btn-text" onClick={() => { setVaultLocked(false); setVaultPw(""); setVaultErr(""); }}>
+                {t("Пропустить")}
+              </div>
+              <div className={"btn-accent" + (vaultPw ? "" : " disabled")} onClick={() => void unlockVault()}>
+                {t("Разблокировать")}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {secretPrompt && (
-        <SecretPrompt req={secretPrompt} onSubmit={submitSecret} onCancel={() => setSecretPrompt(null)} />
+        <SecretPrompt req={secretPrompt} vaultUnlocked={vaultUnlocked} onSubmit={submitSecret} onCancel={() => setSecretPrompt(null)} />
       )}
       {hostKeyPrompt && (
         <HostKeyDialog req={hostKeyPrompt} onAccept={acceptHostKey} onReject={() => setHostKeyPrompt(null)} />

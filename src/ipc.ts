@@ -1,9 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ExecOut, FileEntry, ParsedHost, ServerCfg, Snippet } from "./types";
+import type { ExecOut, FileEntry, ParsedHost, ServerCfg, Settings, Snippet } from "./types";
 
 export interface AppConfig {
   servers: ServerCfg[];
   snippets: Snippet[];
+  settings?: Settings;
+}
+
+export interface ServiceUnit {
+  name: string;
+  load: string;
+  active: string;
+  sub: string;
+  desc: string;
 }
 
 export const ipc = {
@@ -13,6 +22,19 @@ export const ipc = {
   execPty: (cfg: ServerCfg, cmd: string) => invoke<ExecOut>("ssh_exec_pty", { cfg, cmd }),
   dockerAction: (cfg: ServerCfg, action: string, name: string) =>
     invoke<ExecOut>("docker_action", { cfg, action, name }),
+  systemdAction: (cfg: ServerCfg, action: string, unit: string) =>
+    invoke<ExecOut>("systemd_action", { cfg, action, unit }),
+  listServices: (cfg: ServerCfg) => invoke<ServiceUnit[]>("list_services", { cfg }),
+  vaultStatus: () => invoke<{ exists: boolean; unlocked: boolean }>("vault_status"),
+  vaultCreate: (password: string) => invoke<void>("vault_create", { password }),
+  vaultUnlock: (password: string) => invoke<void>("vault_unlock", { password }),
+  vaultStore: (id: string, value: string) => invoke<void>("vault_store", { id, value }),
+  vaultForget: (id: string) => invoke<void>("vault_forget", { id }),
+  vaultLock: () => invoke<void>("vault_lock"),
+  sftpUploadDir: (cfg: ServerCfg, local: string, remote: string) =>
+    invoke<number>("sftp_upload_dir", { cfg, local, remote }),
+  sftpDownloadDir: (cfg: ServerCfg, remote: string, local: string) =>
+    invoke<number>("sftp_download_dir", { cfg, remote, local }),
   provideSecret: (key: string, value: string) => invoke<void>("provide_secret", { key, value }),
   trustHostKey: (label: string, fingerprint: string) =>
     invoke<void>("trust_host_key", { label, fingerprint }),

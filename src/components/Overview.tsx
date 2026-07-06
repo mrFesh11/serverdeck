@@ -105,8 +105,37 @@ export function Overview({ server, runtime, onRefresh, toast }: Props) {
   const [, tick] = useState(0);
   const [logs, setLogs] = useState<{ name: string; text: string } | null>(null);
   const [cMenu, setCMenu] = useState<{ name: string; state: string; x: number; y: number } | null>(null);
-  const [confirm, setConfirm] = useState<{ action: string; label: string; name: string; danger: boolean } | null>(null);
+  const [confirm, setConfirm] = useState<{ action: string; label: string; name: string; danger: boolean; kind: "docker" | "systemd" } | null>(null);
   const [acting, setActing] = useState(false);
+  const [services, setServices] = useState<import("../ipc").ServiceUnit[] | "loading" | null>(null);
+  const [svcQuery, setSvcQuery] = useState("");
+  const [svcMenu, setSvcMenu] = useState<{ name: string; active: string; x: number; y: number } | null>(null);
+
+  const loadServices = async () => {
+    setServices("loading");
+    try {
+      setServices(await ipc.listServices(server));
+    } catch (e) {
+      setServices([]);
+      toast(`${t("Ошибка:")} ${e}`, true);
+    }
+  };
+
+  const runSystemd = async (action: string, name: string) => {
+    setActing(true);
+    try {
+      const res = await ipc.systemdAction(server, action, name);
+      if (action === "status") setLogs({ name: `${name}.service`, text: res.out || "(пусто)" });
+      else if (res.code === 0) toast(`systemctl ${action}: ${name}`);
+      else toast(`systemctl ${action} · ${name}: ${res.out.trim() || "код " + res.code}`, true);
+      if (action !== "status") void loadServices();
+    } catch (e) {
+      toast(`${t("Ошибка:")} ${e}`, true);
+    } finally {
+      setActing(false);
+      setConfirm(null);
+    }
+  };
 
   const runDocker = async (action: string, name: string) => {
     setActing(true);
@@ -249,6 +278,78 @@ export function Overview({ server, runtime, onRefresh, toast }: Props) {
         </div>
       )}
 
+      <div style={{ display: "flex", alignItems: "center", gap: 9, margin: "22px 0 10px" }}>
+        <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>{t("Сервисы")}</h3>
+        <span className="mono" style={{ fontSize: 11, color: "var(--dim)" }}>systemd</span>
+        <span style={{ flex: 1 }} />
+        {Array.isArray(services) && (
+          <input
+            style={{ width: 200, padding: "5px 9px", fontSize: 12 }}
+            placeholder={t("Фильтр…")}
+            value={svcQuery}
+            onChange={(e) => setSvcQuery(e.target.value)}
+          />
+        )}
+        <div className="btn-ghost" style={{ padding: "5px 12px", fontSize: 12 }} onClick={() => void loadServices()}>
+          {services === "loading" ? "…" : Array.isArray(services) ? t("Обновить") : t("Показать сервисы")}
+        </div>
+      </div>
+      {Array.isArray(services) && (
+        <div className="tbl">
+          <div className="tbl-head" style={{ gridTemplateColumns: "1.4fr 0.8fr 0.8fr 2fr 40px" }}>
+            <span>{t("Имя")}</span><span>Active</span><span>Sub</span><span>{t("Описание")}</span><span />
+          </div>
+          {services
+            .filter((s) => !svcQuery || s.name.toLowerCase().includes(svcQuery.toLowerCase()) || s.desc.toLowerCase().includes(svcQuery.toLowerCase()))
+            .slice(0, 300)
+            .map((s) => {
+              const col = s.active === "active" ? "var(--green)" : s.active === "failed" ? "var(--red)" : "#7a5b5b";
+              return (
+                <div className="tbl-row" key={s.name} style={{ gridTemplateColumns: "1.4fr 0.8fr 0.8fr 2fr 40px" }}>
+                  <span className="mono" style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: col }} />
+                    <span style={{ fontSize: 12, color: col }}>{s.active}</span>
+                  </span>
+                  <span className="mono" style={{ fontSize: 11.5, color: "var(--muted)" }}>{s.sub}</span>
+                  <span style={{ fontSize: 12, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.desc}</span>
+                  <span className="link" style={{ textAlign: "right", fontSize: 15, letterSpacing: 1 }} onClick={(e) => setSvcMenu({ name: s.name, active: s.active, x: e.clientX, y: e.clientY })}>⋯</span>
+                </div>
+              );
+            })}
+        </div>
+      )}
+
+      {svcMenu && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 65 }} onClick={() => setSvcMenu(null)} />
+          <div className="ctx-menu" style={{ left: Math.min(svcMenu.x, window.innerWidth - 200), top: Math.min(svcMenu.y, window.innerHeight - 220), width: 180 }}>
+            <div className="mono" style={{ padding: "5px 10px 7px", fontSize: 10.5, color: "var(--dim)", borderBottom: "1px solid var(--border)", marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {svcMenu.name}
+            </div>
+            {([["Статус", "status", false], ["Старт", "start", false], ["Стоп", "stop", true], ["Рестарт", "restart", true]] as [string, string, boolean][])
+              .filter(([, action]) => action === "status" ? true : action === "start" ? svcMenu.active !== "active" : svcMenu.active === "active")
+              .map(([label, action, danger]) => (
+                <div
+                  key={action}
+                  className={"ctx-item" + (danger ? " danger" : "")}
+                  onClick={() => {
+                    const name = svcMenu.name;
+                    setSvcMenu(null);
+                    if (danger) setConfirm({ action, label: t(label), name, danger, kind: "systemd" });
+                    else void runSystemd(action, name);
+                  }}
+                >
+                  <span style={{ width: 16, textAlign: "center", color: danger ? "var(--red)" : "var(--muted)" }}>
+                    {action === "status" ? "≡" : action === "start" ? "▸" : action === "stop" ? "■" : "↻"}
+                  </span>
+                  <span>{t(label)}</span>
+                </div>
+              ))}
+          </div>
+        </>
+      )}
+
       {cMenu && (
         <>
           <div style={{ position: "fixed", inset: 0, zIndex: 65 }} onClick={() => setCMenu(null)} />
@@ -272,7 +373,7 @@ export function Overview({ server, runtime, onRefresh, toast }: Props) {
                     const name = cMenu.name;
                     setCMenu(null);
                     if (action === "logs") void showLogs(name);
-                    else if (danger) setConfirm({ action, label: t(label), name, danger });
+                    else if (danger) setConfirm({ action, label: t(label), name, danger, kind: "docker" });
                     else void runDocker(action, name);
                   }}
                 >
@@ -294,7 +395,15 @@ export function Overview({ server, runtime, onRefresh, toast }: Props) {
               <span className="modal-x" onClick={() => !acting && setConfirm(null)}>×</span>
             </div>
             <div style={{ padding: 18, fontSize: 13, color: "var(--body)", lineHeight: 1.5 }}>
-              {confirm.action === "rm" ? t("Удалить контейнер") : confirm.action === "stop" ? t("Остановить контейнер") : t("Перезапустить контейнер")}{" "}
+              {confirm.kind === "systemd"
+                ? confirm.action === "stop"
+                  ? t("Остановить сервис")
+                  : t("Перезапустить сервис")
+                : confirm.action === "rm"
+                ? t("Удалить контейнер")
+                : confirm.action === "stop"
+                ? t("Остановить контейнер")
+                : t("Перезапустить контейнер")}{" "}
               <b className="mono">{confirm.name}</b>{t(" на")} <span className="mono">{server.name}</span>?
               <div style={{ fontSize: 11.5, color: "var(--yellow)", marginTop: 8 }}>
                 {t("Это продакшен — действие затронет живой сервис.")}
@@ -303,7 +412,7 @@ export function Overview({ server, runtime, onRefresh, toast }: Props) {
             <div className="modal-foot">
               <span style={{ flex: 1 }} />
               <div className="btn-text" onClick={() => !acting && setConfirm(null)}>{t("Отмена")}</div>
-              <div className={"btn-danger" + (acting ? " disabled" : "")} style={{ padding: "9px 16px" }} onClick={() => void runDocker(confirm.action, confirm.name)}>
+              <div className={"btn-danger" + (acting ? " disabled" : "")} style={{ padding: "9px 16px" }} onClick={() => void (confirm.kind === "systemd" ? runSystemd : runDocker)(confirm.action, confirm.name)}>
                 {acting ? "…" : confirm.label}
               </div>
             </div>
